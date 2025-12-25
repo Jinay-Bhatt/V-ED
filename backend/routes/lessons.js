@@ -1,7 +1,7 @@
 // backend/routes/lessons.js
 const express = require('express');
 const { pool } = require('../config/database');
-const { authenticateToken, requireStudent, optionalAuth } = require('../middleware/auth');
+const { authenticateToken, requireStudent } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -22,18 +22,19 @@ router.get('/', async (req, res) => {
 
         if (subject) {
             paramCount++;
-            query += ` AND subject = $${paramCount}`;
+            query += ` AND LOWER(subject) = LOWER($${paramCount})`;
             params.push(subject);
         }
 
         if (difficulty) {
             paramCount++;
-            query += ` AND difficulty = $${paramCount}`;
+            query += ` AND LOWER(difficulty) = LOWER($${paramCount})`;
             params.push(difficulty);
         }
 
         query += ' ORDER BY subject, grade, difficulty, created_at';
 
+        console.log('Lessons query:', query, 'params:', params);
         const result = await pool.query(query, params);
         
         const lessons = result.rows.map(lesson => ({
@@ -46,6 +47,8 @@ router.get('/', async (req, res) => {
             points: lesson.points_reward,
             difficulty: lesson.difficulty
         }));
+
+        console.log(`Found ${lessons.length} lessons`);
 
         res.json({
             success: true,

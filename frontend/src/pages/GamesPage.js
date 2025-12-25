@@ -1,43 +1,48 @@
 // frontend/src/pages/GamesPage.js
 import React, { useState, useEffect, useCallback } from 'react';
-import { showNotification } from '../utils/Languages';
 
 const GamesPage = ({ currentUser, appData, playGame, language, getTranslation }) => {
   const [filteredGames, setFilteredGames] = useState([]);
   const [subjectFilter, setSubjectFilter] = useState('');
 
-  // Add this function to get the correct icon
-  const getGameIcon = (game) => {
+  const getGameIcon = useCallback((game) => {
     const iconMap = {
       'math_quiz_8': '🚀',
       'science_experiment_8': '💡',
       'english_word_game_8': '📝',
       'hindi_story_game_8': '📚',
-      'social_history_game_8': '🏛️'
+      'social_history_game_8': '🏛️',
+      'math_puzzle_8': '🧩',
+      'science_lab_8': '🔬',
+      'english_story_8': '📖',
+      'hindi_vocab_8': '✍️',
+      'social_map_game_8': '🗺️'
     };
-    
-    return iconMap[game.id] || game.icon || '🎮';
-  };
+    return iconMap[game.id] || game.icon || '🎮'; 
+  }, []);
 
-  const getTranslatedGames = useCallback(() => {
-    return (appData?.games || []).map(game => ({
-      ...game,
-      title: getTranslation(game.title),
-      description: getTranslation(game.description),
-    }));
-  }, [appData.games, getTranslation]);
-
-  const filterGames = useCallback(() => {
-    if (!currentUser) return;
-
-    let relevantGames = getTranslatedGames().filter(game => game.grade === currentUser.grade);
-
-    if (subjectFilter) {
-      relevantGames = relevantGames.filter(game => game.subject === subjectFilter);
+  const filterAndSortGames = useCallback(() => {
+    if (!currentUser || !appData?.games) {
+      setFilteredGames([]);
+      return;
     }
 
-    // Sort games to show developed ones first (math AND science games), then others
-    relevantGames.sort((a, b) => {
+    // Map for translations
+    let gamesToDisplay = appData.games.map(game => ({
+      ...game,
+      title: getTranslation(game.title),
+      description: getTranslation(game.description)
+    }));
+
+    // Apply subject filter
+    if (subjectFilter) {
+      gamesToDisplay = gamesToDisplay.filter(
+        game => game.subject.toLowerCase() === subjectFilter.toLowerCase()
+      );
+    }
+
+    // Sort games: developed ones (math AND science) first
+    gamesToDisplay.sort((a, b) => {
       const aDeveloped = a.subject === 'math' || a.subject === 'science';
       const bDeveloped = b.subject === 'math' || b.subject === 'science';
       
@@ -46,18 +51,18 @@ const GamesPage = ({ currentUser, appData, playGame, language, getTranslation })
       return 0;
     });
 
-    setFilteredGames(relevantGames);
-  }, [currentUser, subjectFilter, getTranslatedGames]);
+    setFilteredGames(gamesToDisplay);
+  }, [currentUser, appData?.games, subjectFilter, getTranslation]);
 
   useEffect(() => {
-    filterGames();
-  }, [filterGames]);
+    filterAndSortGames();
+  }, [filterAndSortGames]);
 
   if (!currentUser) {
     return (
       <div className="loading-overlay">
         <div className="loading-content">
-          <h1>🎓 {getTranslation('platform')}</h1>
+          <h1>🎮 {getTranslation('platform')}</h1>
           <p>{getTranslation('loading')}</p>
           <div className="loading-spinner"></div>
         </div>
@@ -72,6 +77,16 @@ const GamesPage = ({ currentUser, appData, playGame, language, getTranslation })
           🎮 {getTranslation('educationalGamesForClass')} {currentUser.grade}
         </h2>
         <div className="filters">
+          <select 
+            className="select"
+            value={currentUser.grade}
+            disabled
+            style={{ marginRight: '10px' }}
+          >
+            <option value={currentUser.grade}>
+              {getTranslation('grade')} {currentUser.grade}
+            </option>
+          </select>
           <select 
             className="select"
             onChange={(e) => setSubjectFilter(e.target.value)} 
@@ -96,7 +111,7 @@ const GamesPage = ({ currentUser, appData, playGame, language, getTranslation })
         ) : (
           filteredGames.map(game => {
             const isPlayed = (currentUser.gamesPlayed || []).includes(game.id);
-            const isDeveloped = game.subject === 'math' || game.subject === 'science'; // Both math and science are developed
+            const isDeveloped = game.subject === 'math' || game.subject === 'science'; 
             
             return (
               <div 
@@ -110,6 +125,7 @@ const GamesPage = ({ currentUser, appData, playGame, language, getTranslation })
                   e.currentTarget.style.transform = 'translateY(0)';
                   e.currentTarget.style.boxShadow = 'none';
                 }}
+                onClick={() => isDeveloped && playGame && playGame(game.id)} 
               >
                 <div className="game-icon">
                   {getGameIcon(game)}
@@ -117,7 +133,7 @@ const GamesPage = ({ currentUser, appData, playGame, language, getTranslation })
                 
                 {isDeveloped && (
                   <div className="developed-badge">
-                    ✨ Developed
+                    ✨ {getTranslation('developed')}
                   </div>
                 )}
                 
@@ -141,14 +157,17 @@ const GamesPage = ({ currentUser, appData, playGame, language, getTranslation })
                 
                 <button 
                   className={`play-game-button ${!isDeveloped ? 'disabled' : ''}`}
-                  onClick={() => isDeveloped ? playGame(game.id) : null}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    isDeveloped && playGame && playGame(game.id);
+                  }}
                   disabled={!isDeveloped}
                   onMouseEnter={(e) => isDeveloped && (e.currentTarget.style.transform = 'translateY(-2px)')}
                   onMouseLeave={(e) => isDeveloped && (e.currentTarget.style.transform = 'translateY(0)')}
                 >
                   {isDeveloped ? 
                     `🎮 ${getTranslation('playGame')}` : 
-                    `🚧 Coming Soon`
+                    `🚧 ${getTranslation('comingSoon')}`
                   }
                 </button>
               </div>

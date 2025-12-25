@@ -8,8 +8,7 @@ import LoginPage from './pages/LoginPage';
 import LessonViewer from './pages/LessonViewer';
 import GameViewer from './pages/GameViewer';
 import ApiService from './services/api';
-// CORRECTED: Changed 'Languages' to 'languages' (lowercase 'l')
-import { languages as allLanguages, translations as allTranslations, showNotification, getTranslation } from './utils/Languages';
+import { languages as allLanguages, showNotification, getTranslation } from './utils/Languages';
 import './App.css';
 
 const App = () => {
@@ -18,39 +17,71 @@ const App = () => {
   const [currentPage, setCurrentPage] = useState('home');
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [currentLanguage, setCurrentLanguage] = useState('en');
-  const [appData, setAppData] = useState({ lessons: [], games: [], badges: [] });
+  const [appData, setAppData] = useState({ lessons: [], games: [], badges: [] }); // Initialize with empty arrays
   const [activeLesson, setActiveLesson] = useState(null);
   const [activeGame, setActiveGame] = useState(null);
 
-  // getTranslation is now directly imported from languages.js
-  // No longer a useCallback defined here in App.js
+  // Log appData changes for debugging
+  useEffect(() => {
+    console.log('App.js - appData updated:', appData);
+  }, [appData]);
 
-  const fetchAppData = useCallback(async (user, lang) => {
-    if (!user || !user.grade || !ApiService.token) {
-      console.warn("Skipping fetchAppData: User, grade, or API token missing. User:", user);
+  // Function to fetch all global app data
+  const fetchAppData = useCallback(async (user) => {
+    if (!user || !user.grade) {
+      console.warn("Skipping fetchAppData: User or grade missing", user);
+      setAppData({ lessons: [], games: [], badges: [] });
       return;
     }
 
     try {
-      const [lessonsResponse, gamesResponse, allBadgesResponse] = await Promise.all([
-        ApiService.getLessons({ grade: user.grade }),
-        ApiService.getGames({ grade: user.grade }),
-        ApiService.getBadges(),
+      console.log(`Fetching app data for grade ${user.grade}...`);
+      
+      const [lessonsResponse, gamesResponse, badgesResponse] = await Promise.all([
+        ApiService.getLessons({ grade: user.grade }).catch(err => {
+          console.error('Failed to fetch lessons:', err);
+          return { data: [] };
+        }),
+        ApiService.getGames({ grade: user.grade }).catch(err => {
+          console.error('Failed to fetch games:', err);
+          return { data: [] };
+        }),
+        ApiService.getBadges().catch(err => {
+          console.error('Failed to fetch badges:', err);
+          return { data: [] };
+        })
       ]);
 
-      setAppData({
-        lessons: lessonsResponse,
-        games: gamesResponse,
-        badges: allBadgesResponse.map(badge => ({
-          ...badge,
-          id: badge.badge_id 
-        })), 
+      // Handle both response formats: {success: true, data: [...]} or just [...]
+      const lessonsData = Array.isArray(lessonsResponse) ? lessonsResponse : (lessonsResponse.data || []);
+      const gamesData = Array.isArray(gamesResponse) ? gamesResponse : (gamesResponse.data || []);
+      const badgesData = Array.isArray(badgesResponse) ? badgesResponse : (badgesResponse.data || []);
+
+      console.log('Extracted data:', { 
+        lessons: lessonsData.length, 
+        games: gamesData.length, 
+        badges: badgesData.length 
       });
+
+      const newAppData = {
+        lessons: lessonsData,
+        games: gamesData,
+        badges: badgesData.map(badge => ({
+          ...badge,
+          id: badge.badge_id || badge.id
+        }))
+      };
+
+      console.log('Setting appData to:', newAppData);
+      setAppData(newAppData);
+
+      console.log('App data set successfully');
     } catch (error) {
       console.error('Failed to fetch app data:', error);
-      showNotification(getTranslation('dataFetchFailed') + ': ' + (error.message || 'Unknown error'), 'error');
+      showNotification('Failed to load data: ' + (error.message || 'Unknown error'), 'error');
+      setAppData({ lessons: [], games: [], badges: [] });
     }
-  }, []); // Dependencies now empty, as getTranslation is imported and currentLanguage is handled by App.js state
+  }, []);
 
   useEffect(() => {
     const initializeApp = async () => {
@@ -59,35 +90,33 @@ const App = () => {
         ApiService.setAuthToken(storedToken);
         try {
           const response = await ApiService.verifyToken();
-          const user = response;
+          const user = response.user || response;
 
           if (!user || !user.id) {
-            throw new Error("User data not returned from token verification or is invalid.");
+            throw new Error("Invalid user data returned from token verification");
           }
           
           const fullUser = {
             ...user,
             completedLessons: user.completedLessons || [],
             gamesPlayed: user.gamesPlayed || [],
-            badges: user.badges || [],
+            badges: user.badges || []
           };
           
           setCurrentUser(fullUser);
           setCurrentLanguage(fullUser.language || 'en');
           
           if (fullUser.grade) {
-            await fetchAppData(fullUser, fullUser.language || 'en');
+            await fetchAppData(fullUser);
           }
         } catch (error) {
-          console.error('Initial token verification failed:', error);
+          console.error('Token verification failed:', error);
           ApiService.setAuthToken(null);
+          localStorage.removeItem('authToken');
           setCurrentUser(null);
           setCurrentPage('home');
-          showNotification(getTranslation('loginFailed') + ': ' + (error.message || 'Please login again.'), 'error');
+          showNotification('Session expired. Please login again.', 'error');
         }
-      } else {
-        setCurrentUser(null);
-        setCurrentPage('home');
       }
       setLoading(false);
     };
@@ -98,9 +127,10 @@ const App = () => {
       setIsOffline(false);
       showNotification('You are back online! 🌐', 'success');
     };
+    
     const handleOffline = () => {
       setIsOffline(true);
-      showNotification(getTranslation('offlineMessage'), 'warning', 5000);
+      showNotification('You are offline. Some features may be unavailable.', 'warning', 5000);
     };
     
     window.addEventListener('online', handleOnline);
@@ -110,7 +140,7 @@ const App = () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [fetchAppData]); // fetchAppData is a dependency
+  }, [fetchAppData]);
 
   const handleLanguageChange = async (langCode) => {
     if (currentUser) {
@@ -119,26 +149,27 @@ const App = () => {
         const updatedUser = updatedUserResponse.user || updatedUserResponse;
 
         if (!updatedUser || !updatedUser.id) {
-            throw new Error("User data not returned from profile update.");
+          throw new Error("Invalid user data returned from profile update");
         }
 
         setCurrentUser(prevUser => ({
           ...prevUser,
           ...updatedUser,
-          completedLessons: updatedUser.completedLessons || [],
-          gamesPlayed: updatedUser.gamesPlayed || [],
-          badges: updatedUser.badges || [],
+          completedLessons: updatedUser.completedLessons || prevUser.completedLessons || [],
+          gamesPlayed: updatedUser.gamesPlayed || prevUser.gamesPlayed || [],
+          badges: updatedUser.badges || prevUser.badges || []
         }));
+
         if (langCode !== currentLanguage) {
-            setCurrentLanguage(updatedUser.language);
-            showNotification(`${getTranslation('languageChanged')} ${allLanguages[updatedUser.language].nativeName}!`, 'success');
+          setCurrentLanguage(updatedUser.language);
+          showNotification(`Language changed to ${allLanguages[updatedUser.language].nativeName}!`, 'success');
+          await fetchAppData(updatedUser);
         } else {
-            showNotification(getTranslation('profileUpdated'), 'success');
+          showNotification('Profile updated successfully!', 'success');
         }
-        
       } catch (error) {
         console.error('Failed to update language:', error);
-        showNotification(error.message || getTranslation('languageChangeFailed'), 'error');
+        showNotification(error.message || 'Failed to change language', 'error');
       }
     }
   };
@@ -147,104 +178,108 @@ const App = () => {
     setCurrentPage(page);
     setActiveLesson(null);
     setActiveGame(null);
-    showNotification(`${getTranslation('navigatedTo')} ${getTranslation(page)}`, 'info', 1500);
   };
 
   const handleLogout = () => {
     ApiService.setAuthToken(null);
+    localStorage.removeItem('authToken');
     setCurrentUser(null);
     setActiveLesson(null);
     setActiveGame(null);
     setCurrentPage('home');
-    showNotification('Logged out successfully!', 'info');
+    setAppData({ lessons: [], games: [], badges: [] });
+    showNotification('Logged out successfully! 👋', 'info');
   };
 
   const handleLogin = async (userData, token) => {
-    ApiService.setAuthToken(token);
     try {
-      const user = userData; 
-      
-      if (!user || !user.id) {
-        throw new Error("User data not provided to handleLogin or is invalid.");
+      ApiService.setAuthToken(token);
+      localStorage.setItem('authToken', token);
+
+      if (!userData || !userData.id) {
+        throw new Error("Invalid user data provided to handleLogin");
       }
       
       const fullUser = {
-        ...user,
-        completedLessons: user.completedLessons || [],
-        gamesPlayed: user.gamesPlayed || [],
-        badges: user.badges || [],
+        ...userData,
+        completedLessons: userData.completedLessons || [],
+        gamesPlayed: userData.gamesPlayed || [],
+        badges: userData.badges || []
       };
 
       setCurrentUser(fullUser);
       setCurrentLanguage(fullUser.language || 'en');
       
       if (fullUser.grade) {
-        await fetchAppData(fullUser, fullUser.language || 'en');
+        await fetchAppData(fullUser);
       }
+      
       setCurrentPage('home');
+      showNotification('Login successful! Welcome back! 🎉', 'success');
     } catch (error) {
-      console.error('Error in handleLogin (processing user data):', error); 
-      showNotification(error.message || getTranslation('loginFailed'), 'error');
+      console.error('Error in handleLogin:', error);
+      showNotification(error.message || 'Login failed', 'error');
       ApiService.setAuthToken(null);
+      localStorage.removeItem('authToken');
       setCurrentUser(null);
       setCurrentPage('home');
+      setAppData({ lessons: [], games: [], badges: [] });
     }
   };
 
-  const startLesson = (lessonId) => {
-    const lessonToView = appData.lessons.find(l => l.id === lessonId);
-    if (lessonToView) {
-      setActiveLesson(lessonToView);
-      setCurrentPage('lessons');
-      showNotification(getTranslation('lessonStarted'), 'info');
-    } else {
-      showNotification('Lesson not found!', 'error');
-    }
-  };
-
+const startLesson = (lesson) => {
+  // Accept the full lesson object instead of just the ID
+  if (lesson && lesson.id) {
+    console.log('Starting lesson:', lesson);
+    setActiveLesson(lesson);
+    setCurrentPage('lessons');
+  } else {
+    console.error('Invalid lesson data:', lesson);
+    showNotification('Lesson not found!', 'error');
+  }
+};
   const handleLessonCompletion = async (lessonId, score, timeSpent) => {
-    if (currentUser) {
-      try {
-        const lesson = appData.lessons.find(l => l.id === lessonId);
-        if (!lesson) {
-          showNotification('Lesson not found!', 'error');
-          return;
-        }
+    if (!currentUser) return;
 
-        const { pointsEarned, earnedBadges } = await ApiService.completeLesson(lessonId, score, timeSpent);
-        
-        const updatedUserResponse = await ApiService.getProfile();
-        const updatedUserFromDb = updatedUserResponse.user || updatedUserResponse;
-
-        if (!updatedUserFromDb || !updatedUserFromDb.id) {
-            throw new Error("User data not returned after completing lesson.");
-        }
-
-        setCurrentUser({
-            ...updatedUserFromDb,
-            completedLessons: updatedUserFromDb.completedLessons || [],
-            gamesPlayed: updatedUserFromDb.gamesPlayed || [],
-            badges: updatedUserFromDb.badges || [],
-        });
-
-        if (pointsEarned > 0) {
-          showNotification(`${getTranslation('lessonCompletedMsg')} +${pointsEarned} ${getTranslation('pointsEarnedMsg')}`, 'success');
-        } else {
-          showNotification(getTranslation('lessonAlreadyCompleted'), 'info');
-        }
-
-        if (earnedBadges && earnedBadges.length > 0) {
-          earnedBadges.forEach(badgeId => {
-            const badgeName = appData.badges.find(b => b.id === badgeId)?.name || badgeId;
-            showNotification(`🏆 ${getTranslation('badgeEarned')} ${badgeName}!`, 'success');
-          });
-        }
-        setActiveLesson(null);
-        setCurrentPage('lessons');
-      } catch (error) {
-        console.error('Failed to complete lesson:', error);
-        showNotification(error.message || getTranslation('lessonCompletionFailed'), 'error');
+    try {
+      const lesson = appData.lessons.find(l => l.id === lessonId);
+      if (!lesson) {
+        showNotification('Lesson not found!', 'error');
+        return;
       }
+
+      const completionResponse = await ApiService.completeLesson(lessonId, score, timeSpent);
+      const pointsEarned = completionResponse.data?.pointsEarned || completionResponse.pointsEarned || 0;
+      const isFirstCompletion = completionResponse.data?.isFirstCompletion || completionResponse.isFirstCompletion || false;
+
+      // Refresh user profile
+      const updatedUserResponse = await ApiService.getProfile();
+      const updatedUser = updatedUserResponse.user || updatedUserResponse;
+
+      if (updatedUser && updatedUser.id) {
+        setCurrentUser({
+          ...updatedUser,
+          completedLessons: updatedUser.completedLessons || [],
+          gamesPlayed: updatedUser.gamesPlayed || [],
+          badges: updatedUser.badges || []
+        });
+      }
+
+      if (pointsEarned > 0) {
+        showNotification(`Lesson completed! +${pointsEarned} points earned! 🎉`, 'success');
+      } else {
+        showNotification('Lesson updated!', 'info');
+      }
+
+      setActiveLesson(null);
+      setCurrentPage('lessons');
+      
+      if (updatedUser) {
+        await fetchAppData(updatedUser);
+      }
+    } catch (error) {
+      console.error('Failed to complete lesson:', error);
+      showNotification(error.message || 'Failed to complete lesson', 'error');
     }
   };
 
@@ -253,86 +288,86 @@ const App = () => {
     if (gameToView) {
       setActiveGame(gameToView);
       setCurrentPage('games');
-      showNotification(getTranslation('gameStarted'), 'info');
     } else {
+      console.error('Game not found:', gameId);
       showNotification('Game not found!', 'error');
     }
   };
 
   const handleGameCompletion = async (gameId, score, timeSpent) => {
-    if (currentUser) {
-      try {
-        const game = appData.games.find(g => g.id === gameId);
-        if (!game) {
-          showNotification('Game not found!', 'error');
-          return;
-        }
+    if (!currentUser) return;
 
-        const { pointsEarned, earnedBadges } = await ApiService.playGame(gameId, score, timeSpent);
-        
-        const updatedUserResponse = await ApiService.getProfile();
-        const updatedUserFromDb = updatedUserResponse.user || updatedUserResponse;
-
-        if (!updatedUserFromDb || !updatedUserFromDb.id) {
-            throw new Error("User data not returned after playing game.");
-        }
-
-        setCurrentUser({
-            ...updatedUserFromDb,
-            completedLessons: updatedUserFromDb.completedLessons || [],
-            gamesPlayed: updatedUserFromDb.gamesPlayed || [],
-            badges: updatedUserFromDb.badges || [],
-        });
-
-        if (pointsEarned > 0) {
-          showNotification(`${getTranslation('gameCompletedMsg')} +${pointsEarned} ${getTranslation('pointsEarnedMsg')}`, 'success');
-        } else {
-          showNotification(getTranslation('gameAlreadyPlayed'), 'info');
-        }
-
-        if (earnedBadges && earnedBadges.length > 0) {
-          earnedBadges.forEach(badgeId => {
-            const badgeName = appData.badges.find(b => b.id === badgeId)?.name || badgeId;
-            showNotification(`🏆 ${getTranslation('badgeEarned')} ${badgeName}!`, 'success');
-          });
-        }
-        setActiveGame(null);
-        setCurrentPage('games');
-      } catch (error) {
-        console.error('Failed to complete game:', error);
-        showNotification(error.message || getTranslation('gameCompletionFailed'), 'error');
+    try {
+      const game = appData.games.find(g => g.id === gameId);
+      if (!game) {
+        showNotification('Game not found!', 'error');
+        return;
       }
+
+      const completionResponse = await ApiService.playGame(gameId, score, timeSpent);
+      const pointsEarned = completionResponse.data?.pointsEarned || completionResponse.pointsEarned || 0;
+      const isFirstTime = completionResponse.data?.isFirstTime || completionResponse.isFirstTime || false;
+
+      // Refresh user profile
+      const updatedUserResponse = await ApiService.getProfile();
+      const updatedUser = updatedUserResponse.user || updatedUserResponse;
+
+      if (updatedUser && updatedUser.id) {
+        setCurrentUser({
+          ...updatedUser,
+          completedLessons: updatedUser.completedLessons || [],
+          gamesPlayed: updatedUser.gamesPlayed || [],
+          badges: updatedUser.badges || []
+        });
+      }
+
+      if (pointsEarned > 0) {
+        showNotification(`Game completed! +${pointsEarned} points earned! 🎮`, 'success');
+      } else {
+        showNotification('Game played!', 'info');
+      }
+
+      setActiveGame(null);
+      setCurrentPage('games');
+      
+      if (updatedUser) {
+        await fetchAppData(updatedUser);
+      }
+    } catch (error) {
+      console.error('Failed to complete game:', error);
+      showNotification(error.message || 'Failed to complete game', 'error');
     }
   };
 
   const updateProfile = async (updates) => {
-    if (currentUser) {
-      try {
-        const updatedUserResponse = await ApiService.updateProfile(updates);
-        const updatedUser = updatedUserResponse.user || updatedUserResponse;
+    if (!currentUser) return;
 
-        if (!updatedUser || !updatedUser.id) {
-            throw new Error("User data not returned from profile update.");
-        }
+    try {
+      const updatedUserResponse = await ApiService.updateProfile(updates);
+      const updatedUser = updatedUserResponse.user || updatedUserResponse;
 
-        setCurrentUser(prevUser => ({
-          ...prevUser,
-          ...updatedUser,
-          completedLessons: updatedUser.completedLessons || [],
-          gamesPlayed: updatedUser.gamesPlayed || [],
-          badges: updatedUser.badges || [],
-        }));
-        if (updates.language && updates.language !== currentLanguage) {
-            setCurrentLanguage(updatedUser.language);
-            showNotification(`${getTranslation('languageChanged')} ${allLanguages[updatedUser.language].nativeName}!`, 'success');
-        } else {
-            showNotification(getTranslation('profileUpdated'), 'success');
-        }
-        
-      } catch (error) {
-        console.error('Failed to update profile:', error);
-        showNotification(error.message || getTranslation('profileUpdateFailed'), 'error');
+      if (!updatedUser || !updatedUser.id) {
+        throw new Error("Invalid user data returned from profile update");
       }
+
+      setCurrentUser(prevUser => ({
+        ...prevUser,
+        ...updatedUser,
+        completedLessons: updatedUser.completedLessons || prevUser.completedLessons || [],
+        gamesPlayed: updatedUser.gamesPlayed || prevUser.gamesPlayed || [],
+        badges: updatedUser.badges || prevUser.badges || []
+      }));
+
+      if (updates.language && updates.language !== currentLanguage) {
+        setCurrentLanguage(updatedUser.language);
+        showNotification(`Language changed to ${allLanguages[updatedUser.language].nativeName}!`, 'success');
+        await fetchAppData(updatedUser);
+      } else {
+        showNotification('Profile updated successfully!', 'success');
+      }
+    } catch (error) {
+      console.error('Failed to update profile:', error);
+      showNotification(error.message || 'Failed to update profile', 'error');
     }
   };
 
@@ -344,8 +379,8 @@ const App = () => {
     return (
       <div className="loading-overlay">
         <div className="loading-content">
-          <h1>🎓 {getTranslation('platform')}</h1>
-          <p>{getTranslation('loading')}</p>
+          <h1>🎓 V-Ed Platform</h1>
+          <p>Loading...</p>
           <div className="loading-spinner"></div>
         </div>
       </div>
@@ -393,7 +428,6 @@ const App = () => {
         </nav>
         
         <div className="user-info">
-          
           <div className="user-profile">
             <span>👤 {currentUser?.name || 'Guest'}</span>
             <span>{getTranslation('class')} {currentUser?.grade || ''} • {currentUser?.rollNumber || ''}</span>
@@ -473,7 +507,7 @@ const App = () => {
 
       {isOffline && (
         <div className="offline-indicator">
-          📱 {getTranslation('offlineMessage')}
+          📱 You are offline
         </div>
       )}
     </div>

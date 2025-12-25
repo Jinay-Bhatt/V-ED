@@ -22,18 +22,19 @@ router.get('/', async (req, res) => {
 
         if (subject) {
             paramCount++;
-            query += ` AND subject = $${paramCount}`;
+            query += ` AND LOWER(subject) = LOWER($${paramCount})`;
             params.push(subject);
         }
 
         if (difficulty) {
             paramCount++;
-            query += ` AND difficulty = $${paramCount}`;
+            query += ` AND LOWER(difficulty) = LOWER($${paramCount})`;
             params.push(difficulty);
         }
 
         query += ' ORDER BY subject, grade, difficulty, created_at';
 
+        console.log('Games query:', query, 'params:', params);
         const result = await pool.query(query, params);
         
         const games = result.rows.map(game => ({
@@ -46,6 +47,8 @@ router.get('/', async (req, res) => {
             points: game.points_reward,
             icon: game.icon
         }));
+
+        console.log(`Found ${games.length} games`);
 
         res.json({
             success: true,
